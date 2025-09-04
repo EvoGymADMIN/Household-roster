@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>House Roster</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+            color: #1f2937;
+        }
+    </style>
+</head>
+<body class="flex flex-col items-center justify-center min-h-screen p-4">
+
+    <!-- Main Container -->
+    <div id="app-container" class="bg-white rounded-xl shadow-2xl p-6 md:p-10 w-full max-w-2xl transform transition-all duration-300">
+
+        <!-- Header -->
+        <header class="text-center mb-8">
+            <h1 class="text-3xl md:text-4xl font-extrabold text-gray-800">Household Roster</h1>
+            <p id="household-id-display" class="mt-2 text-sm text-gray-500 break-all">Household ID: <span id="user-id">Loading...</span></p>
+        </header>
+
+        <!-- Household Selection Section -->
+        <div id="household-selection" class="space-y-4 mb-8">
+            <h2 class="text-2xl font-bold text-gray-700">Join or Create a Household</h2>
+            <div class="relative flex">
+                <input id="join-input" type="text" placeholder="Enter Household ID" class="flex-grow p-3 rounded-l-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                <button id="join-btn" class="bg-indigo-600 text-white rounded-r-lg px-6 py-3 font-semibold hover:bg-indigo-700 transition-colors">Join</button>
+            </div>
+            <p class="text-sm text-gray-600">If you're the first person, your ID will be generated and displayed above. Share it with your housemates!</p>
+        </div>
+
+        <!-- Roster Section (hidden by default) -->
+        <div id="roster-section" class="hidden space-y-8">
+            
+            <!-- User Info and Members List -->
+            <div class="space-y-4">
+                <div class="flex items-center space-x-2">
+                    <span class="text-xl font-bold text-gray-700">Your Name:</span>
+                    <input id="user-name-input" type="text" placeholder="Your name" class="p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 flex-grow">
+                </div>
+                <h3 class="text-xl font-bold text-gray-700">Household Members</h3>
+                <div id="members-list" class="flex flex-wrap gap-2 text-sm text-gray-600"></div>
+            </div>
+
+            <!-- Dinner Roster -->
+            <section>
+                <h2 class="text-2xl font-bold text-gray-700 mb-4">Dinner Roster</h2>
+                
+                <h3 class="text-xl font-bold text-gray-700 mt-6 mb-2">Cooking</h3>
+                <div id="dinner-cooking-roster" class="bg-gray-100 rounded-xl p-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                    <!-- Cooking roster cards will be generated here -->
+                </div>
+
+                <h3 class="text-xl font-bold text-gray-700 mt-6 mb-2">Clean Up</h3>
+                <div id="dinner-cleanup-roster" class="bg-gray-100 rounded-xl p-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                    <!-- Clean up roster cards will be generated here -->
+                </div>
+            </section>
+
+            <!-- Cleaning Roster -->
+            <section>
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-2xl font-bold text-gray-700">Cleaning Roster</h2>
+                    <button id="rotate-roster-btn" class="bg-indigo-600 text-white rounded-lg px-4 py-2 font-semibold hover:bg-indigo-700 transition-colors">Rotate Roster</button>
+                </div>
+                
+                <div id="cleaning-roster" class="bg-gray-100 rounded-xl p-4 space-y-4">
+                    <!-- Cleaning tasks will be generated here -->
+                </div>
+            </section>
+
+        </div>
+
+    </div>
+
+    <!-- Firebase Scripts and App Logic -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, query, addDoc, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global variables provided by the environment
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        // --- Firebase Initialization ---
+        let app, db, auth;
+        let userId = null;
+        let householdId = null;
+
+        try {
+            app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+            console.log("Firebase initialized successfully.");
+        } catch (e) {
+            console.error("Firebase initialization failed:", e);
+        }
+
+        const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+        const householdDataPath = (id) => `artifacts/${appId}/public/data/rosters/${id}`;
+        const usersCollectionPath = (id) => `artifacts/${appId}/public/data/rosters/${id}/users`;
+        
+        let membersData = {}; // Cache to store user ID to name mapping
+        
+        const householdIdDisplay = document.getElementById('household-id-display');
+        const rosterSection = document.getElementById('roster-section');
+        const householdSelection = document.getElementById('household-selection');
+        const joinInput = document.getElementById('join-input');
+        const joinBtn = document.getElementById('join-btn');
+        const userNameInput = document.getElementById('user-name-input');
+        const membersListEl = document.getElementById('members-list');
+        const dinnerCookingRosterEl = document.getElementById('dinner-cooking-roster');
+        const dinnerCleanupRosterEl = document.getElementById('dinner-cleanup-roster');
+        const cleaningRosterEl = document.getElementById('cleaning-roster');
+        const rotateRosterBtn = document.getElementById('rotate-roster-btn');
+
+        // --- Authentication and UI State Management ---
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                userId = user.uid;
+                document.getElementById('user-id').textContent = userId;
+                
+                const storedHouseholdId = localStorage.getItem('householdId');
+                if (storedHouseholdId) {
+                    householdId = storedHouseholdId;
+                    await setupHousehold(householdId);
+                } else {
+                    householdId = userId;
+                    await setupHousehold(householdId);
+                }
+            } else {
+                await signInAnonymously(auth);
+            }
+        });
+
+        const setupHousehold = async (id) => {
+            try {
+                const householdRef = doc(db, householdDataPath(id));
+                const householdDoc = await getDoc(householdRef);
+                
+                if (!householdDoc.exists()) {
+                    // Initial state for the cleaning roster
+                    const initialCleaningTasks = [
+                        { name: "Bathroom and toilet", assignedTo: null, isComplete: false },
+                        { name: "Lounge and Hallway", assignedTo: null, isComplete: false },
+                        { name: "Kitchen and Laundry", assignedTo: null, isComplete: false }
+                    ];
+
+                    await setDoc(householdRef, {
+                        cookingRoster: {},
+                        cleanupRoster: {},
+                        cleaningTasks: initialCleaningTasks,
+                        createdAt: new Date(),
+                        rotationOrder: []
+                    });
+                    console.log("New household created.");
+                }
+
+                householdId = id;
+                localStorage.setItem('householdId', householdId);
+
+                const userDocRef = doc(db, usersCollectionPath(householdId), userId);
+                const userDoc = await getDoc(userDocRef);
+                if (!userDoc.exists()) {
+                    await setDoc(userDocRef, { name: "New User" });
+                }
+
+                householdSelection.classList.add('hidden');
+                rosterSection.classList.remove('hidden');
+
+                setupRealtimeListeners();
+
+            } catch (e) {
+                console.error("Error setting up household:", e);
+                householdId = userId;
+                localStorage.removeItem('householdId');
+                setupHousehold(householdId);
+            }
+        };
+
+        const setupRealtimeListeners = () => {
+            if (!householdId || !db) return;
+            
+            onSnapshot(doc(db, householdDataPath(householdId)), (docSnapshot) => {
+                if (docSnapshot.exists()) {
+                    renderRosters(docSnapshot.data());
+                }
+            });
+
+            onSnapshot(collection(db, usersCollectionPath(householdId)), (querySnapshot) => {
+                membersData = {};
+                const currentUsers = [];
+                querySnapshot.forEach(doc => {
+                    membersData[doc.id] = doc.data().name;
+                    currentUsers.push({ id: doc.id, name: doc.data().name });
+                });
+                renderMembers();
+                
+                // If the number of members is 3, initialize the rotation order
+                if (currentUsers.length === 3) {
+                    const householdRef = doc(db, householdDataPath(householdId));
+                    getDoc(householdRef).then(docSnapshot => {
+                        const data = docSnapshot.data();
+                        if (data && data.rotationOrder.length === 0) {
+                             // Match provided names to user IDs
+                             let nadiaId = currentUsers.find(u => u.name === "Nadia")?.id;
+                             let cathrynId = currentUsers.find(u => u.name === "Cathryn")?.id;
+                             let stephenId = currentUsers.find(u => u.name === "Stephen")?.id;
+
+                             // Default to the order users joined if names don't match
+                             if (!nadiaId || !cathrynId || !stephenId) {
+                                 nadiaId = currentUsers[0]?.id;
+                                 cathrynId = currentUsers[1]?.id;
+                                 stephenId = currentUsers[2]?.id;
+                             }
+                             
+                             const initialRotationOrder = [nadiaId, cathrynId, stephenId];
+                             
+                             const initialCleaningTasks = [
+                                 { name: "Bathroom and toilet", assignedTo: cathrynId, isComplete: false },
+                                 { name: "Lounge and Hallway", assignedTo: nadiaId, isComplete: false },
+                                 { name: "Kitchen and Laundry", assignedTo: stephenId, isComplete: false }
+                             ];
+
+                             const initialCookingRoster = {
+                                'Monday': stephenId,
+                                'Tuesday': stephenId,
+                                'Wednesday': stephenId,
+                                'Thursday': stephenId,
+                                'Friday': null, // Shared day
+                                'Saturday': cathrynId,
+                                'Sunday': null, // Shared day
+                             };
+
+                             const initialCleanupRoster = {
+                                'Sunday': nadiaId,
+                                'Monday': nadiaId,
+                                'Tuesday': cathrynId,
+                                'Wednesday': cathrynId,
+                                'Thursday': cathrynId,
+                                'Friday': nadiaId,
+                                'Saturday': stephenId,
+                             };
+
+                             updateDoc(householdRef, {
+                                 rotationOrder: initialRotationOrder,
+                                 cleaningTasks: initialCleaningTasks,
+                                 cookingRoster: initialCookingRoster,
+                                 cleanupRoster: initialCleanupRoster
+                             }).catch(e => console.error("Error setting initial roster:", e));
+                        }
+                    });
+                }
+            });
+        };
+
+        const renderRosters = (data) => {
+            renderDinnerCookingRoster(data.cookingRoster || {});
+            renderDinnerCleanupRoster(data.cleanupRoster || {});
+            renderCleaningRoster(data.cleaningTasks || [], data.rotationOrder || []);
+        };
+        
+        const renderMembers = () => {
+            membersListEl.innerHTML = '';
+            const memberNames = Object.values(membersData);
+            if (memberNames.length === 0) {
+                membersListEl.textContent = 'No members yet. Share your ID!';
+            } else {
+                memberNames.forEach(name => {
+                    const memberTag = document.createElement('span');
+                    memberTag.textContent = name;
+                    memberTag.className = 'bg-gray-200 text-gray-700 px-3 py-1 rounded-full text-sm font-medium';
+                    membersListEl.appendChild(memberTag);
+                });
+            }
+        };
+
+        const renderDinnerCookingRoster = (roster) => {
+            dinnerCookingRosterEl.innerHTML = '';
+            daysOfWeek.forEach((day, index) => {
+                const assignedUserId = roster[day] || null;
+                const assignedName = assignedUserId ? (membersData[assignedUserId] || 'Unknown') : 'Unassigned';
+                
+                let isAssignedToMe = assignedUserId === userId;
+                let canAssignMe = false;
+
+                // Handle shared days for Stephen and Cathryn
+                if ((day === 'Friday' || day === 'Sunday') && (membersData[userId] === 'Stephen' || membersData[userId] === 'Cathryn')) {
+                    canAssignMe = true;
+                    isAssignedToMe = assignedUserId === userId;
+                } else if (assignedUserId === userId) {
+                    canAssignMe = true;
+                }
+
+                const dayCard = document.createElement('div');
+                dayCard.className = `p-4 rounded-lg shadow-sm border ${isAssignedToMe ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 bg-white'}`;
+                
+                dayCard.innerHTML = `
+                    <h4 class="font-bold text-lg">${day}</h4>
+                    <p class="text-sm text-gray-500 mt-1">
+                        <span class="font-semibold">${assignedName}</span>
+                    </p>
+                    <button class="mt-2 text-white px-3 py-1 text-sm rounded-lg font-semibold transition-colors
+                        ${isAssignedToMe ? 'bg-indigo-700' : 'bg-indigo-500 hover:bg-indigo-600'} assign-cooking-btn" data-day="${day}" ${!canAssignMe ? 'disabled' : ''}>
+                        ${isAssignedToMe ? 'Assigned' : 'Assign Me'}
+                    </button>
+                `;
+                dinnerCookingRosterEl.appendChild(dayCard);
+            });
+        };
+
+        const renderDinnerCleanupRoster = (roster) => {
+            dinnerCleanupRosterEl.innerHTML = '';
+            daysOfWeek.forEach((day, index) => {
+                const assignedUserId = roster[day] || null;
+                const assignedName = assignedUserId ? (membersData[assignedUserId] || 'Unknown') : 'Unassigned';
+                const isAssignedToMe = assignedUserId === assignedUserId; // The cleanup roster is fixed, so no need to check against userId
+
+                const dayCard = document.createElement('div');
+                dayCard.className = `p-4 rounded-lg shadow-sm border border-gray-200 bg-white`;
+                
+                dayCard.innerHTML = `
+                    <h4 class="font-bold text-lg">${day}</h4>
+                    <p class="text-sm text-gray-500 mt-1">
+                        <span class="font-semibold">${assignedName}</span>
+                    </p>
+                `;
+                dinnerCleanupRosterEl.appendChild(dayCard);
+            });
+        };
+
+        const renderCleaningRoster = (tasks, rotationOrder) => {
+            cleaningRosterEl.innerHTML = '';
+            
+            // Re-order the tasks based on the rotation order
+            const orderedTasks = tasks.map(task => {
+                const assignedIndex = rotationOrder.indexOf(task.assignedTo);
+                return { ...task, orderIndex: assignedIndex };
+            }).sort((a, b) => a.orderIndex - b.orderIndex);
+
+            orderedTasks.forEach((task, index) => {
+                const assignedName = task.assignedTo ? (membersData[task.assignedTo] || 'Unknown') : 'Unassigned';
+                const isAssignedToMe = task.assignedTo === userId;
+
+                const taskItem = document.createElement('div');
+                taskItem.className = `p-4 rounded-lg flex items-center shadow-sm ${task.isComplete ? 'bg-green-100' : 'bg-white'}`;
+                
+                taskItem.innerHTML = `
+                    <div class="flex-1">
+                        <p class="font-semibold ${task.isComplete ? 'line-through text-gray-500' : ''}">${task.name}</p>
+                        <p class="text-sm text-gray-500">${assignedName}</p>
+                    </div>
+                    <div class="flex space-x-2 ml-4">
+                        <button class="w-8 h-8 rounded-full flex items-center justify-center transition-colors mark-complete-btn" data-name="${task.name}"
+                            ${isAssignedToMe ? (task.isComplete ? 'bg-gray-400 cursor-not-allowed' : 'bg-green-500 hover:bg-green-600') : 'bg-gray-300 cursor-not-allowed'}"
+                            ${isAssignedToMe ? '' : 'disabled'}>
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 ${isAssignedToMe ? 'text-white' : 'text-gray-500'}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                            </svg>
+                        </button>
+                    </div>
+                `;
+                cleaningRosterEl.appendChild(taskItem);
+            });
+        };
+
+        // --- Event Listeners ---
+        joinBtn.addEventListener('click', async () => {
+            const id = joinInput.value.trim();
+            if (id) {
+                await setupHousehold(id);
+            }
+        });
+
+        userNameInput.addEventListener('change', async (e) => {
+            if (!householdId || !userId) return;
+            const newName = e.target.value.trim() || 'Unnamed User';
+            const userDocRef = doc(db, usersCollectionPath(householdId), userId);
+            try {
+                await updateDoc(userDocRef, { name: newName });
+            } catch (e) {
+                console.error("Error updating user name:", e);
+            }
+        });
+
+        // Event delegation for cooking assignment
+        dinnerCookingRosterEl.addEventListener('click', async (e) => {
+            const btn = e.target.closest('.assign-cooking-btn');
+            if (btn && householdId) {
+                const day = btn.dataset.day;
+                const householdDocRef = doc(db, householdDataPath(householdId));
+                const currentRoster = (await getDoc(householdDocRef)).data().cookingRoster || {};
+                currentRoster[day] = userId;
+                try {
+                    await updateDoc(householdDocRef, { cookingRoster: currentRoster });
+                } catch (e) {
+                    console.error("Error assigning cooking:", e);
+                }
+            }
+        });
+
+        // Event delegation for cleaning tasks
+        cleaningRosterEl.addEventListener('click', async (e) => {
+            if (!householdId) return;
+
+            const btn = e.target.closest('.mark-complete-btn');
+            if (!btn) return;
+            
+            const taskName = btn.dataset.name;
+            const householdDocRef = doc(db, householdDataPath(householdId));
+            const currentTasks = (await getDoc(householdDocRef)).data().cleaningTasks || [];
+            
+            const taskToUpdate = currentTasks.find(t => t.name === taskName);
+            if (taskToUpdate) {
+                taskToUpdate.isComplete = true;
+                try {
+                    await updateDoc(householdDocRef, { cleaningTasks: currentTasks });
+                } catch (e) {
+                    console.error("Error marking task complete:", e);
+                }
+            }
+        });
+
+        rotateRosterBtn.addEventListener('click', async () => {
+            if (!householdId) return;
+            
+            const householdDocRef = doc(db, householdDataPath(householdId));
+            const docSnapshot = await getDoc(householdDocRef);
+            const data = docSnapshot.data();
+            
+            if (data && data.rotationOrder && data.rotationOrder.length > 0) {
+                // Perform the rotation
+                const newRotationOrder = [...data.rotationOrder];
+                const firstPerson = newRotationOrder.shift();
+                newRotationOrder.push(firstPerson);
+
+                const tasks = data.cleaningTasks;
+                const newTasks = tasks.map((task, index) => ({
+                    ...task,
+                    assignedTo: newRotationOrder[index],
+                    isComplete: false // Reset completion status on rotation
+                }));
+                
+                try {
+                    await updateDoc(householdDocRef, { 
+                        rotationOrder: newRotationOrder,
+                        cleaningTasks: newTasks
+                    });
+                } catch (e) {
+                    console.error("Error rotating roster:", e);
+                }
+            }
+        });
+
+        // Initialize Firebase with the provided tokens
+        if (auth && initialAuthToken) {
+            signInWithCustomToken(auth, initialAuthToken).catch(e => {
+                console.error("Custom token sign-in failed:", e);
+                signInAnonymously(auth);
+            });
+        }
+    </script>
+</body>
+</html>
