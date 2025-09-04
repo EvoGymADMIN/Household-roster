@@ -154,9 +154,29 @@
                         { name: "Kitchen and Laundry", assignedTo: null, isComplete: false }
                     ];
 
+                    // Initial fixed rosters
+                    const initialCookingRoster = {
+                        'Monday': null,
+                        'Tuesday': null,
+                        'Wednesday': null,
+                        'Thursday': null,
+                        'Friday': null,
+                        'Saturday': null,
+                        'Sunday': null,
+                    };
+                    const initialCleanupRoster = {
+                        'Sunday': null,
+                        'Monday': null,
+                        'Tuesday': null,
+                        'Wednesday': null,
+                        'Thursday': null,
+                        'Friday': null,
+                        'Saturday': null,
+                    };
+
                     await setDoc(householdRef, {
-                        cookingRoster: {},
-                        cleanupRoster: {},
+                        cookingRoster: initialCookingRoster,
+                        cleanupRoster: initialCleanupRoster,
                         cleaningTasks: initialCleaningTasks,
                         createdAt: new Date(),
                         rotationOrder: []
@@ -209,7 +229,7 @@
                     const householdRef = doc(db, householdDataPath(householdId));
                     getDoc(householdRef).then(docSnapshot => {
                         const data = docSnapshot.data();
-                        if (data && data.rotationOrder.length === 0) {
+                        if (data && (data.rotationOrder.length === 0 || Object.keys(data.cookingRoster).some(key => data.cookingRoster[key] === null))) {
                              // Match provided names to user IDs
                              let nadiaId = currentUsers.find(u => u.name === "Nadia")?.id;
                              let cathrynId = currentUsers.find(u => u.name === "Cathryn")?.id;
